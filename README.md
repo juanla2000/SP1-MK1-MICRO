@@ -1,2 +1,2 @@
-# SP1-ESP32
-Sp1 Mk2 Tangible MIDI Control
+# SP1-MK1 Arduino Micro
+Sp1 Mk1 Tangible MIDI Control
