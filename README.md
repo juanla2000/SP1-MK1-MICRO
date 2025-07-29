@@ -1,76 +1,102 @@
-# SP1 Mk1 — Firmware v1.0 (Arduino Micro)
+# SP1 Mk1 — Firmware v1.1 (Arduino Micro)
 
-Este módulo forma parte del sistema **SP1 Tangible** y representa el **núcleo físico** del controlador: captura 108 controles (knobs y switches), los convierte a mensajes MIDI y se comunica con los módulos Mk2 (ESP32-S3) y Mk3 (Teensy).
-
----
-
-## 🧠 Funciones clave
-
-### 🔧 Hardware físico
-- 91 potenciómetros + 17 switches leídos vía 9 multiplexores HC4067.
-- Pines de selección de canal compartidos (S0–S3), señal común en A0.
-- Se leen todos como **entradas analógicas** con zona muerta (`delta ≥ 2`) para evitar ruido.
-
-### 🎛 Envío de datos
-- Todos los CCs se envían por:
-  - USB MIDI
-  - DIN MIDI (`Serial1`)
-  - UART a Mk2 (via `SoftwareSerial`)
-- Envío eficiente: solo controles que cambian.
-- Canal MIDI dinámico por grupo funcional (ver más abajo).
-
-### 🔁 Puente MIDI completo
-- El Mk1 actúa como **concentrador MIDI activo**, reenviando CCs tanto por USB como DIN.
-- Procesa comandos UART tipo `#SET:` y los transforma en eventos MIDI.
-- Además, el sistema es capaz de interpretar comandos desde USB y UART, y aplicar cambios directos al estado interno (muteo, reasignación, etc.).
-- La función `updateMIDI()` también puede alimentar el ruteo dinámico entre módulos, integrándose con `processMIDIMessage()` si es necesario.
-- El Mk1 enruta y reenvía todo lo que recibe (DIN ↔ USB ↔ UART), funcionando como **concentrador MIDI** entre módulos y externos.
+Este módulo es la base física del sistema **SP1 Tangible**, controlando hasta **108 entradas analógicas** (91 knobs + 17 switches) y actuando como **puente MIDI autónomo** entre USB, DIN y UART. Puede operar de forma independiente o como esclavo del módulo Mk2 (ESP32-S3), enviando y recibiendo comandos por UART.
 
 ---
 
-## 📡 Comunicación UART (con Mk2)
+## ⚙️ Hardware físico
 
-### Comandos UART soportados:
-
-| Comando                | Descripción                                                             |
-|------------------------|-------------------------------------------------------------------------|
-| `#SET:<cc>:<val>`      | Fuerza el valor del control `<cc>` a `<val>` y lo envía por MIDI        |
-| `#GET_ALL`             | Envía por UART el valor de todos los controles                          |
-| `#RESET_ALL`           | Reenvía todos los controles por MIDI, aunque no hayan cambiado          |
-| `#MUTE` / `#UNMUTE`    | Silencia o reactiva la salida MIDI del Mk1                              |
-| `#ID?`                 | Devuelve: `SP1_MK1_V1.0`                                                |
-| `#CHANNEL:<cc>:<ch>`   | Reasigna el canal MIDI del control `<cc>` a `<ch>`                      |
-| `#GROUPCH:<name>:<ch>` | Reasigna el canal MIDI del grupo funcional `<name>` a `<ch>`            |
+- Arduino Micro (ATmega32u4)
+- 9 multiplexores CD74HC4067 (16 canales cada uno)
+- Pines S0–S3 compartidos entre los 9 MUX (D2–D5)
+- Línea analógica común a A0
+- Pines EN dedicados por MUX: D7 a D15
+- UART entre Mk1 ↔ Mk2 por SoftwareSerial (pines 8 y 9)
 
 ---
 
-## 🧩 Arquitectura por grupos
+## 🎛 Control de entradas
 
-Cada control pertenece a un grupo funcional fijo, mapeado internamente en el Mk1:
-
-| Grupo ID | Nombre     | Canal MIDI por defecto |
-|----------|------------|------------------------|
-| 0        | SUB        | 1                      |
-| 1        | OSC1       | 2                      |
-| 2        | OSC2       | 3                      |
-| 3        | MIX        | 4                      |
-| 4        | ENV1       | 5                      |
-| 5        | ENV2       | 6                      |
-| 6        | LFO1       | 7                      |
-| 7        | LFO2       | 8                      |
-| 8        | FX         | 9                      |
-| 9        | SWITCHES   | 10                     |
-
-> El canal de cada grupo puede ser modificado dinámicamente desde el Mk2 vía `#GROUPCH`.
+- `scanControls()` lee todos los controles como analógicos (zona muerta ≥2)
+- Se detectan cambios y solo se envían valores modificados
+- Cada control tiene un `grupo`, un `nombre`, un `CC`, un `canal MIDI`, y se define en `control_map.h`
 
 ---
 
-## 📂 Estructura del código
+## 🎹 Salidas y ruteo MIDI
+
+- **USB MIDI** (nativo, vía `MIDIUSB.h`)
+- **DIN MIDI** (`Serial1` — UART real)
+- **UART MIDI** (a Mk2 por SoftwareSerial)
+
+El sistema reenvía CC y notas entre interfaces:
+- USB ↔ DIN
+- DIN ↔ UART
+- USB ↔ UART
+
+---
+
+## 🔀 Enrutamiento MIDI dinámico
+
+- Todos los mensajes entrantes USB se procesan con `checkIncomingUSBMIDI()` y se reenvían con `processMIDIMessage()`
+- Comandos UART del Mk2 permiten modificar valores o canales sin tocar el hardware
+
+---
+
+## 🧪 Comandos UART (Mk2 → Mk1)
+
+| Comando                | Acción                                                                 |
+|------------------------|------------------------------------------------------------------------|
+| `#SET:<idx>:<val>:<ch>`| Asigna valor `<val>` al control `<idx>` y lo envía como CC por canal `<ch>` |
+| `#CHANNEL:<idx>:<ch>`  | Reasigna canal MIDI de un control específico                          |
+| `#GROUPCH:<grupo>:<ch>`| Asigna canal MIDI a un grupo funcional completo                        |
+| `#MUTE` / `#UNMUTE`    | Silencia o reactiva toda la salida MIDI                                |
+| `#ID?`                 | Devuelve el identificador `SP1_MK1_V1.1`                               |
+
+---
+
+## 🧩 Grupos funcionales
+
+Cada control pertenece a un grupo lógico:
+
+| ID  | Grupo      | Canal MIDI por defecto |
+|-----|------------|------------------------|
+| 0   | SUB        | 1                      |
+| 1   | OSC1       | 2                      |
+| 2   | OSC2       | 3                      |
+| 3   | MIX        | 4                      |
+| 4   | ENV1       | 5                      |
+| 5   | ENV2       | 6                      |
+| 6   | LFO1       | 7                      |
+| 7   | LFO2       | 8                      |
+| 8   | FX         | 9                      |
+| 9   | SWITCHES   | 10                     |
+
+> Estos canales pueden modificarse dinámicamente desde el Mk2.
+
+---
+
+## 🧠 Funciones clave del firmware
+
+- `initHardware()` – Configura pines, multiplexores y arrays de control.
+- `initMIDI()` – Inicia MIDI USB y UART SoftwareSerial.
+- `scanControls()` – Detecta cambios en los controles.
+- `sendCC()` – Envía mensajes CC por USB y DIN.
+- `updateMIDI()` – Procesa comandos recibidos por UART desde el Mk2.
+- `checkIncomingUSBMIDI()` – Procesa mensajes entrantes por USB.
+- `processMIDIMessage()` – Aplica lógica de reenvío y muting.
+- `sendToMk2()` – Envía comandos MIDI codificados al Mk2.
+
+---
+
+## 📁 Estructura del código
 
 ```text
 FIRMWARE_SP1_Mk1_MICRO_ARDUINO/
-├── Sp1_Mk1.ino              → Loop principal y control general
-├── config.h                 → Pines, constantes globales
-├── hardware.cpp/h           → Lectura de multiplexores, agrupación, canal MIDI
-├── midi.cpp/h               → MIDI USB/DIN/UART + comandos UART
-├── routing.cpp/h            → Detección de Mk2 activo por UART
+├── FIRMWARE_SP1_Mk1_MICRO_ARDUINO.ino   → Loop principal
+├── config.h                             → Pines y flags globales
+├── control_map.h / control_map.cpp      → Tabla de definición de controles (PROGMEM)
+├── hardware.h / hardware.cpp            → Lectura física y agrupación de controles
+├── midi.h / midi.cpp                    → Manejo de MIDI USB, DIN, UART
+├── routing.h / routing.cpp              → Estado de conexión con Mk2
+├── mux_input_pins.h / mux_input_pins.cpp→ Pines EN y configuración de multiplexores

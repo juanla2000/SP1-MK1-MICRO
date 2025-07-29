@@ -1,5 +1,4 @@
-#ifndef ROUTING_H
-#define ROUTING_H
+#pragma once
 
 #include <Arduino.h>
 
@@ -20,5 +19,3 @@ bool isMk3Connected();
 
 // Modo autónomo: true si Mk1 funciona sin Mk2/Mk3
 bool isStandaloneMode();
-
-#endif

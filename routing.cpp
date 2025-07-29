@@ -48,8 +48,15 @@ void processMIDIMessage(uint8_t type, uint8_t data1, uint8_t data2) {
 
     // Por ahora reenviamos todos los CC a través de sendCC
     if ((type & 0xF0) == 0xB0) {
-        sendCC(data1, data2, 1);
+        sendCC(data1, data2, (type & 0x0F) + 1);
     }
 
     // Futuro: puedes enrutar Note On/Off u otros tipos
+}
+
+// Redirección desde routing.cpp: envía por UART al Mk2
+extern void sendToMk2(const String& msg);  // Declaración explícita
+void sendToMk2(uint8_t cc, uint8_t value, uint8_t channel) {
+  String msg = "#SET:" + String(cc) + ":" + String(value) + ":" + String(channel);
+  sendToMk2(msg);  // ✅ Llama a la versión String
 }

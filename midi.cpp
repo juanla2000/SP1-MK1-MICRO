@@ -1,70 +1,89 @@
+#include <MIDIUSB.h>
 #include "midi.h"
-#include "config.h"
 #include "hardware.h"
 #include "routing.h"
-
-#include <MIDIUSB.h>
+#include "control_map.h"
+#include "config.h"  // ← aquí se definen UART_RX y UART_TX
+#include <avr/pgmspace.h>
 #include <SoftwareSerial.h>
 
-// UART hacia SP1 Mk2 (DIN MIDI físico)
-SoftwareSerial MIDI_UART(MK2_RX_PIN, MK2_TX_PIN);
+// Declaraciones adelantadas
+void parseUartCommand(const String& command);
 
-// Buffer para comandos por UART desde Mk2
-static String uartCommandBuffer = "";
+// Variable global del .ino
+extern bool muteOutput;
+
+// Puerto UART hacia Mk2
+SoftwareSerial mk2Serial(UART_RX, UART_TX);
 
 void initMIDI() {
-    MIDI_UART.begin(31250);
-}
-
-void parseUartCommand(const String& cmd) {
-    if (cmd.startsWith("#SET:")) {
-        int firstColon = cmd.indexOf(':');
-        int secondColon = cmd.indexOf(':', firstColon + 1);
-        if (secondColon > 0) {
-            int cc = cmd.substring(firstColon + 1, secondColon).toInt();
-            int val = cmd.substring(secondColon + 1).toInt();
-            if (cc >= 0 && cc < NUM_CONTROLS && val >= 0 && val <= 127) {
-                previousValues[cc] = 255;
-                controlValues[cc] = val;
-                sendCC(cc, val, getControlChannel(cc));
-            }
-        }
-    }
-
-    // Aquí podrías incluir otros comandos tipo #MUTE, #UNMUTE, etc.
-    // No se llama a processMIDIMessage() porque cmd no es binario
+  mk2Serial.begin(31250); // velocidad MIDI estándar
 }
 
 void updateMIDI() {
-    while (MIDI_UART.available()) {
-        char c = MIDI_UART.read();
-        if (c == '\n') {
-            parseUartCommand(uartCommandBuffer);
-            uartCommandBuffer = "";
-        } else {
-            uartCommandBuffer += c;
-        }
+  static String uartBuffer = "";
+
+  while (mk2Serial.available()) {
+    char c = mk2Serial.read();
+    if (c == '\n') {
+      parseUartCommand(uartBuffer);
+      uartBuffer = "";
+    } else {
+      uartBuffer += c;
     }
+  }
 }
 
-void sendCC(uint8_t cc, uint8_t val, uint8_t channel) {
-    if (channel == 0 || channel > 16) return;
+void parseUartCommand(const String& command) {
+  if (command.startsWith("#SET:")) {
+    int sep1 = command.indexOf(':', 5);
+    int sep2 = command.indexOf(':', sep1 + 1);
+    if (sep1 > 0 && sep2 > sep1) {
+      uint16_t idx = command.substring(5, sep1).toInt();
+      uint8_t val = command.substring(sep1 + 1, sep2).toInt();
+      uint8_t chn = command.substring(sep2 + 1).toInt();
 
-    uint8_t status = 0xB0 | ((channel - 1) & 0x0F);
+      if (idx < NUM_CONTROLS) {
+        previousValues[idx] = 255;
+        controlValues[idx] = val;
 
-    // MIDI UART (DIN MIDI)
-    MIDI_UART.write(status);
-    MIDI_UART.write(cc);
-    MIDI_UART.write(val);
-
-    // MIDI USB
-    midiEventPacket_t event = {0x0B, status, cc, val};
-    MidiUSB.sendMIDI(event);
-    MidiUSB.flush();
+        ControlDefinition temp;
+        memcpy_P(&temp, &controlMap[idx], sizeof(ControlDefinition));
+        sendCC(temp.cc, val, chn);
+      }
+    }
+  } else if (command.startsWith("#CHANNEL:")) {
+    int sep = command.indexOf(':', 9);
+    if (sep > 0) {
+      uint16_t idx = command.substring(9, sep).toInt();
+      uint8_t newChannel = command.substring(sep + 1).toInt();
+      if (idx < NUM_CONTROLS) {
+        // No se puede reasignar canal en PROGMEM, se ignora
+      }
+    }
+  } else if (command.startsWith("#MUTE")) {
+    muteOutput = true;
+  } else if (command.startsWith("#UNMUTE")) {
+    muteOutput = false;
+  }
 }
 
-void sendToMk2(uint8_t type, uint8_t data1, uint8_t data2) {
-    MIDI_UART.write(type);
-    MIDI_UART.write(data1);
-    MIDI_UART.write(data2);
+void sendToMk2(const String& data) {
+  mk2Serial.println(data);
+}
+
+// Envía un mensaje CC estándar por USB MIDI
+void sendCC(uint8_t cc, uint8_t value, uint8_t channel) {
+  midiEventPacket_t event = {0x0B, static_cast<uint8_t>(0xB0 | (channel & 0x0F)), cc, value};
+  MidiUSB.sendMIDI(event);
+  MidiUSB.flush();
+
+  #if DEBUG
+    DBG_PRINT("[sendCC] CC: ");
+    DBG_PRINT(cc);
+    DBG_PRINT(" Val: ");
+    DBG_PRINT(value);
+    DBG_PRINT(" Ch: ");
+    DBG_PRINTLN(channel);
+  #endif
 }

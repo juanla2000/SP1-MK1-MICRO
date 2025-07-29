@@ -1,56 +1,36 @@
 #include "hardware.h"
+#include "config.h"
+#include "control_map.h"
+#include <avr/pgmspace.h>
 
-// Variables globales
-uint8_t controlValues[NUM_CONTROLS];
-uint8_t previousValues[NUM_CONTROLS];
+uint8_t controlValues[NUM_CONTROLS] = {0};
+uint8_t previousValues[NUM_CONTROLS] = {255};
 
-// Mapeo: índice de control → grupo funcional (fijo)
-static const uint8_t grupoPorControl[NUM_CONTROLS] = {
-  // Grupo 0 = SUB
-  0,0,0,0,0,0,
-  // Grupo 1 = OSC1
-  1,1,1,1,1,1,
-  // Grupo 2 = OSC2
-  2,2,2,2,2,2,
-  // Grupo 3 = MIX
-  3,3,3,3,3,3,
-  // Grupo 4 = ENV1
-  4,4,4,4,4,4,
-  // Grupo 5 = ENV2
-  5,5,5,5,5,5,
-  // Grupo 6 = LFO1
-  6,6,6,6,6,6,
-  // Grupo 7 = LFO2
-  7,7,7,7,7,7,
-  // Grupo 8 = FX
-  8,8,8,8,8,
-  // Grupo 9 = SWITCHES
-  9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9
-};
+const uint8_t mux_input_pins[9] = {7, 8, 9, 10, 11, 12, 13, 14, 15};
 
-// Mapeo: grupo funcional → canal MIDI (editable)
-static uint8_t canalPorGrupo[10]; // 0–9
+#define PIN_S0 MUX_S0
+#define PIN_S1 MUX_S1
+#define PIN_S2 MUX_S2
+#define PIN_S3 MUX_S3
 
 static bool hasChanged = false;
+static uint8_t canalPorGrupo[16];
 
 static void setMuxChannel(uint8_t channel) {
-  digitalWrite(MUX_S0, channel & 0x01);
-  digitalWrite(MUX_S1, (channel >> 1) & 0x01);
-  digitalWrite(MUX_S2, (channel >> 2) & 0x01);
-  digitalWrite(MUX_S3, (channel >> 3) & 0x01);
+  digitalWrite(PIN_S0, channel & 0x01);
+  digitalWrite(PIN_S1, (channel >> 1) & 0x01);
+  digitalWrite(PIN_S2, (channel >> 2) & 0x01);
+  digitalWrite(PIN_S3, (channel >> 3) & 0x01);
 }
 
 void initHardware() {
-  pinMode(MUX_S0, OUTPUT);
-  pinMode(MUX_S1, OUTPUT);
-  pinMode(MUX_S2, OUTPUT);
-  pinMode(MUX_S3, OUTPUT);
+  pinMode(PIN_S0, OUTPUT);
+  pinMode(PIN_S1, OUTPUT);
+  pinMode(PIN_S2, OUTPUT);
+  pinMode(PIN_S3, OUTPUT);
 
-  pinMode(MUX_ANALOG_SIGNAL, INPUT);
-
-  for (uint8_t i = 0; i < NUM_ANALOG_MUX; i++) {
-    pinMode(analogMuxEnables[i], OUTPUT);
-    digitalWrite(analogMuxEnables[i], HIGH);
+  for (uint8_t i = 0; i < 9; i++) {
+    pinMode(mux_input_pins[i], INPUT);
   }
 
   for (uint16_t i = 0; i < NUM_CONTROLS; i++) {
@@ -58,48 +38,28 @@ void initHardware() {
     previousValues[i] = 255;
   }
 
-  // Asignación por defecto: cada grupo funcional tiene su canal MIDI
-  canalPorGrupo[0] = 1;  // SUB
-  canalPorGrupo[1] = 2;  // OSC1
-  canalPorGrupo[2] = 3;  // OSC2
-  canalPorGrupo[3] = 4;  // MIX
-  canalPorGrupo[4] = 5;  // ENV1
-  canalPorGrupo[5] = 6;  // ENV2
-  canalPorGrupo[6] = 7;  // LFO1
-  canalPorGrupo[7] = 8;  // LFO2
-  canalPorGrupo[8] = 9;  // FX
-  canalPorGrupo[9] = 10; // SWITCHES
+  for (uint8_t i = 0; i < sizeof(canalPorGrupo); i++) {
+    canalPorGrupo[i] = 1 + i;
+  }
 }
 
 void scanControls() {
   hasChanged = false;
-  uint16_t index = 0;
 
-  for (uint8_t mux = 0; mux < NUM_ANALOG_MUX; mux++) {
-    digitalWrite(analogMuxEnables[mux], LOW);
+  for (uint16_t i = 0; i < NUM_CONTROLS; i++) {
+    ControlDefinition ctrl;
+    memcpy_P(&ctrl, &controlMap[i], sizeof(ControlDefinition));
 
-    for (uint8_t ch = 0; ch < 16; ch++) {
-      if (index >= NUM_CONTROLS) break;
+    setMuxChannel(ctrl.canal_mux);
+    delayMicroseconds(3);
+    uint16_t rawValue = analogRead(mux_input_pins[ctrl.mux]);
+    uint8_t mappedValue = rawValue >> 3;
 
-      setMuxChannel(ch);
-      delayMicroseconds(5);
-
-      int raw = analogRead(MUX_ANALOG_SIGNAL);
-      uint8_t value = (index < NUM_KNOBS)
-                    ? map(raw, 0, 1023, 0, 127)
-                    : (raw > 500 ? 127 : 0);
-
-      controlValues[index] = value;
-
-      if (abs((int)value - (int)previousValues[index]) >= 2) {
-        previousValues[index] = value;
-        hasChanged = true;
-      }
-
-      index++;
+    if (controlValues[i] != mappedValue) {
+      previousValues[i] = controlValues[i];
+      controlValues[i] = mappedValue;
+      hasChanged = true;
     }
-
-    digitalWrite(analogMuxEnables[mux], HIGH);
   }
 }
 
@@ -108,31 +68,23 @@ bool controlHasChanged() {
 }
 
 uint8_t getControlValue(uint16_t index) {
-  if (index >= NUM_CONTROLS) return 0;
   return controlValues[index];
 }
 
 bool isControlAnalog(uint16_t index) {
-  return index < NUM_KNOBS;
+  return true;
 }
 
 uint8_t getControlChannel(uint16_t index) {
-  if (index >= NUM_CONTROLS) return 1;
-  uint8_t group = grupoPorControl[index];
-  return canalPorGrupo[group];
+  ControlDefinition ctrl;
+  memcpy_P(&ctrl, &controlMap[index], sizeof(ControlDefinition));
+  return ctrl.canal_midi;
 }
 
-void setGroupChannel(uint8_t groupId, uint8_t midiChannel) {
-  if (groupId < 10 && midiChannel >= 1 && midiChannel <= 16) {
-    canalPorGrupo[groupId] = midiChannel;
-  }
-}
 void setControlChannel(uint16_t index, uint8_t channel) {
-  // Esta función mantiene compatibilidad con #CHANNEL:<index>:<channel>
-  // Anula el canal por grupo directamente
-  if (index >= NUM_CONTROLS || channel < 1 || channel > 16) return;
+  // No se puede modificar directamente en PROGMEM
+}
 
-  // Opcional: calcular el grupo afectado
-  uint8_t grupo = grupoPorControl[index];
-  canalPorGrupo[grupo] = channel;
+void setGroupChannel(const char* grupo, uint8_t midiChannel) {
+  // No se puede modificar directamente en PROGMEM
 }

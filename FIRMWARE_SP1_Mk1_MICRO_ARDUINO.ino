@@ -6,7 +6,10 @@ extern bool muteOutput;
 #include "hardware.h"
 #include "midi.h"
 #include "routing.h"
+#include "control_map.h"
 #include <MIDIUSB.h>
+#include <avr/pgmspace.h>
+
 
 bool muteOutput = false; // control global para #MUTE/#UNMUTE
 
@@ -28,10 +31,7 @@ void checkIncomingUSBMIDI() {
         Serial.println(d2);
       #endif
 
-      // Opcional: reenviar el mensaje por UART/DIN
-      // MIDI_UART.write(rx.byte1);
-      // MIDI_UART.write(rx.byte2);
-      // MIDI_UART.write(rx.byte3);
+      processMIDIMessage(rx.byte1, rx.byte2, rx.byte3);
     }
   } while (rx.header != 0);
 }
@@ -51,7 +51,6 @@ void setup() {
     DBG_PRINTLN("[SP1_Mk1] Setup completo");
   #endif
 
-  // Enviar nota MIDI por USB al iniciar (prueba)
   if (!muteOutput) {
     midiEventPacket_t noteOn = {0x09, 0x90, 60, 100};
     MidiUSB.sendMIDI(noteOn);
@@ -65,18 +64,27 @@ void setup() {
 
 void loop() {
   scanControls();         // Escanea todos los potenciómetros e interruptores
-  updateMIDI();           // Procesa mensajes MIDI y comandos UART
-  checkMk2Connection();   // Detecta si Mk2 está activo
+  updateMIDI();           // Procesa comandos MIDI tipo #SET, #CHANNEL, etc.
+  checkMk2Connection();   // Reenvía ping y evalúa si Mk2 responde
   checkIncomingUSBMIDI(); // Escanea MIDI entrante por USB
 
   if (controlHasChanged() && !muteOutput) {
     for (uint16_t i = 0; i < NUM_CONTROLS; i++) {
       if (previousValues[i] != controlValues[i]) {
         previousValues[i] = controlValues[i];
-        uint8_t cc = i;
+
+        ControlDefinition temp;
+        memcpy_P(&temp, &controlMap[i], sizeof(ControlDefinition));
+
+        uint8_t cc = temp.cc;
         uint8_t value = controlValues[i];
-        uint8_t channel = getControlChannel(i);
-        sendCC(cc, value, channel);  // Envío directo de control
+        uint8_t channel = temp.canal_midi;
+
+        if (isStandaloneMode()) {
+          value = constrain(value, 10, 120);
+        }
+
+        sendCC(cc, value, channel);
       }
     }
   }
