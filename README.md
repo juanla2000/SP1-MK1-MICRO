@@ -1,105 +1,76 @@
-# SP1-MK1 Arduino Micro
-Sp1 Mk1 Tangible MIDI Control
+# SP1 Mk1 — Firmware v1.0 (Arduino Micro)
 
-# README SP1\_ARDUINO\_MICRO
-
-Este archivo describe el estado actual y las tareas pendientes para el firmware MIDI implementado sobre la placa Arduino Micro, que forma parte del proyecto FIRMWARE\_MIDI\_SP1 en combinación con un ESP32-S3.
-
-## 📌 Estado Actual del Firmware
-
-### Funciones Actuales Implementadas
-
-* **Lectura de controles físicos:**
-
-  * Se realiza la lectura directa de potenciómetros y botones conectados analógicamente y digitalmente.
-
-* **Comunicación Serial con ESP32:**
-
-  * Recepción básica de mensajes por UART desde el ESP32 para actualizar valores MIDI internos y reenviarlos al PC.
-
-* **Envío de Mensajes MIDI:**
-
-  * Los controles físicos envían mensajes MIDI CC directamente vía USB usando la librería MIDIUSB estándar.
-
-* **Sincronización con ESP32:**
-
-  * Recibe por UART mensajes CC provenientes del ESP32 para reenviarlos por USB al DAW o sintetizador.
-
-## 📂 Estructura Actual del Código
-
-Actualmente, el código está íntegramente contenido en un único archivo `.ino`:
-
-* **SP1\_ARDUINO\_MICRO.ino**: Contiene toda la lógica actual para lectura analógica/digital, envío de MIDI USB y recepción UART.
+Este módulo forma parte del sistema **SP1 Tangible** y representa el **núcleo físico** del controlador: captura 108 controles (knobs y switches), los convierte a mensajes MIDI y se comunica con los módulos Mk2 (ESP32-S3) y Mk3 (Teensy).
 
 ---
 
-## 🛠️ Tareas Pendientes para Implementar
+## 🧠 Funciones clave
 
-A continuación se enumeran las mejoras pendientes identificadas en base a las prácticas recomendadas y al análisis comparativo realizado con otros proyectos como Cthulhinho:
+### 🔧 Hardware físico
+- 91 potenciómetros + 17 switches leídos vía 9 multiplexores HC4067.
+- Pines de selección de canal compartidos (S0–S3), señal común en A0.
+- Se leen todos como **entradas analógicas** con zona muerta (`delta ≥ 2`) para evitar ruido.
 
-### 🔴 Alta Prioridad:
+### 🎛 Envío de datos
+- Todos los CCs se envían por:
+  - USB MIDI
+  - DIN MIDI (`Serial1`)
+  - UART a Mk2 (via `SoftwareSerial`)
+- Envío eficiente: solo controles que cambian.
+- Canal MIDI dinámico por grupo funcional (ver más abajo).
 
-* **Modularización del código**:
-
-  * Separar en archivos específicos la lógica MIDI, comunicación UART y controles analógicos:
-
-    * `comunicacion_micro.h/.cpp` (MIDI USB y comunicación UART segura)
-    * `controles_micro.h/.cpp` (Lectura y filtrado de entradas analógicas/digitales)
-
-* **Comunicación UART segura con ESP32**:
-
-  * Implementar protocolo estructurado con delimitadores y checksum básico para asegurar integridad de datos.
-
-* **Filtrado avanzado de entradas analógicas**:
-
-  * Añadir filtros digitales (media móvil ponderada o mediana) para estabilizar lecturas analógicas.
-
-### 🟠 Media Prioridad:
-
-* **Optimización del envío de mensajes MIDI USB**:
-
-  * Agregar bufferización y enviar mensajes solo cuando existan cambios significativos en los controles.
-
-* **MIDI Thru**:
-
-  * Implementar reenvío transparente de mensajes MIDI recibidos por UART hacia USB.
-
-### 🟢 Baja Prioridad:
-
-* **Gestión no bloqueante**:
-
-  * Implementar rutinas periódicas basadas en `millis()` en vez de funciones bloqueantes (`delay()`).
-
-* **Debug avanzado por puerto Serial**:
-
-  * Añadir mensajes estructurados con niveles de importancia (INFO, ERROR, DEBUG).
-
-* **Sistema basado en eventos para mensajes CC**:
-
-  * Añadir un sistema eficiente que permita reaccionar rápidamente a cambios provenientes del ESP32.
+### 🔁 Puente MIDI completo
+- El Mk1 actúa como **concentrador MIDI activo**, reenviando CCs tanto por USB como DIN.
+- Procesa comandos UART tipo `#SET:` y los transforma en eventos MIDI.
+- Además, el sistema es capaz de interpretar comandos desde USB y UART, y aplicar cambios directos al estado interno (muteo, reasignación, etc.).
+- La función `updateMIDI()` también puede alimentar el ruteo dinámico entre módulos, integrándose con `processMIDIMessage()` si es necesario.
+- El Mk1 enruta y reenvía todo lo que recibe (DIN ↔ USB ↔ UART), funcionando como **concentrador MIDI** entre módulos y externos.
 
 ---
 
-## 🔗 Interacción con el Proyecto ESP32
+## 📡 Comunicación UART (con Mk2)
 
-El Arduino Micro funciona exclusivamente como controlador MIDI principal:
+### Comandos UART soportados:
 
-* **Recibe desde el ESP32 por UART:**
-
-  * Valores CC para actualizar internamente los controles MIDI enviados por USB.
-
-* **No maneja Rotary Encoder:**
-
-  * El encoder rotativo para menús y presets se encuentra conectado directamente al ESP32.
-
-* **Interfaz USB MIDI directa al PC:**
-
-  * Envío de todos los mensajes MIDI generados desde los controles físicos y provenientes del ESP32.
+| Comando                | Descripción                                                             |
+|------------------------|-------------------------------------------------------------------------|
+| `#SET:<cc>:<val>`      | Fuerza el valor del control `<cc>` a `<val>` y lo envía por MIDI        |
+| `#GET_ALL`             | Envía por UART el valor de todos los controles                          |
+| `#RESET_ALL`           | Reenvía todos los controles por MIDI, aunque no hayan cambiado          |
+| `#MUTE` / `#UNMUTE`    | Silencia o reactiva la salida MIDI del Mk1                              |
+| `#ID?`                 | Devuelve: `SP1_MK1_V1.0`                                                |
+| `#CHANNEL:<cc>:<ch>`   | Reasigna el canal MIDI del control `<cc>` a `<ch>`                      |
+| `#GROUPCH:<name>:<ch>` | Reasigna el canal MIDI del grupo funcional `<name>` a `<ch>`            |
 
 ---
 
-## 🚀 Próximos Pasos Recomendados
+## 🧩 Arquitectura por grupos
 
-Se recomienda iniciar con la modularización inmediata del código actual, seguida por la implementación de una comunicación UART segura y la mejora de la estabilidad de lectura de controles analógicos.
+Cada control pertenece a un grupo funcional fijo, mapeado internamente en el Mk1:
 
-Este enfoque proporcionará una base sólida, escalable y fácilmente mantenible para futuras mejoras y optimizaciones del firmware.
+| Grupo ID | Nombre     | Canal MIDI por defecto |
+|----------|------------|------------------------|
+| 0        | SUB        | 1                      |
+| 1        | OSC1       | 2                      |
+| 2        | OSC2       | 3                      |
+| 3        | MIX        | 4                      |
+| 4        | ENV1       | 5                      |
+| 5        | ENV2       | 6                      |
+| 6        | LFO1       | 7                      |
+| 7        | LFO2       | 8                      |
+| 8        | FX         | 9                      |
+| 9        | SWITCHES   | 10                     |
+
+> El canal de cada grupo puede ser modificado dinámicamente desde el Mk2 vía `#GROUPCH`.
+
+---
+
+## 📂 Estructura del código
+
+```text
+FIRMWARE_SP1_Mk1_MICRO_ARDUINO/
+├── Sp1_Mk1.ino              → Loop principal y control general
+├── config.h                 → Pines, constantes globales
+├── hardware.cpp/h           → Lectura de multiplexores, agrupación, canal MIDI
+├── midi.cpp/h               → MIDI USB/DIN/UART + comandos UART
+├── routing.cpp/h            → Detección de Mk2 activo por UART
